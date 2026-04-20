@@ -33,6 +33,10 @@ func NewProxy(a *providers.Anthropic, u *repository.UsageRepo) *Proxy {
 
 // Messages proxies POST /v1/messages to Anthropic, records usage, prices it,
 // and returns the upstream response verbatim to the client.
+//
+// If the request body has `"stream": true` the response is forwarded as
+// Server-Sent Events, and billing info is captured from the `message_delta`
+// event near the end of the stream.
 func (p *Proxy) Messages(w http.ResponseWriter, r *http.Request) {
 	key, ok := middleware.APIKeyFromContext(r.Context())
 	if !ok {
@@ -46,6 +50,11 @@ func (p *Proxy) Messages(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer r.Body.Close()
+
+	if isStreamRequest(body) {
+		p.handleStream(w, r, key.ID, body)
+		return
+	}
 
 	result, err := p.anthropic.Messages(r.Context(), body)
 	if err != nil {
@@ -62,6 +71,58 @@ func (p *Proxy) Messages(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("X-Gateway-Latency-MS", itoa(result.LatencyMS))
 	w.WriteHeader(result.StatusCode)
 	_, _ = w.Write(result.Body)
+}
+
+// handleStream proxies an SSE stream from Anthropic to the client without
+// buffering the full response, so tokens appear at the client as they arrive.
+func (p *Proxy) handleStream(w http.ResponseWriter, r *http.Request, apiKeyID int64, body []byte) {
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		http.Error(w, "streaming unsupported by this server", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	w.Header().Set("X-Accel-Buffering", "no") // disable proxy buffering (nginx)
+	w.WriteHeader(http.StatusOK)
+
+	result, err := p.anthropic.MessagesStream(r.Context(), body, w, flusher.Flush)
+	if err != nil {
+		log.Error().Err(err).Msg("stream failed")
+		p.recordFailure(apiKeyID, err.Error())
+		return
+	}
+
+	// Record final usage (only output tokens are known after the last delta).
+	req := &models.Request{
+		APIKeyID:         apiKeyID,
+		Provider:         "anthropic",
+		Model:            result.Model,
+		InputTokens:      result.Usage.InputTokens,
+		OutputTokens:     result.Usage.OutputTokens,
+		CacheReadTokens:  result.Usage.CacheReadInputTokens,
+		CacheWriteTokens: result.Usage.CacheCreationInputTokens,
+		CostUSD:          providers.CostUSD(result.Model, result.Usage),
+		LatencyMS:        result.LatencyMS,
+		StatusCode:       result.StatusCode,
+	}
+	ctx, cancel := bgCtx()
+	defer cancel()
+	if err := p.usage.RecordRequest(ctx, req); err != nil {
+		log.Error().Err(err).Int64("api_key_id", apiKeyID).Msg("record stream request")
+	}
+}
+
+// isStreamRequest returns true when the JSON body contains `"stream": true`.
+// Uses a minimal scan to avoid decoding the full payload twice.
+func isStreamRequest(body []byte) bool {
+	var probe struct {
+		Stream bool `json:"stream"`
+	}
+	_ = json.Unmarshal(body, &probe)
+	return probe.Stream
 }
 
 func (p *Proxy) recordSuccess(apiKeyID int64, r *providers.ProxyResult) {

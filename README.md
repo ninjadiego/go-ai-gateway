@@ -49,10 +49,11 @@ Every company integrating LLMs (Claude, GPT-4) runs into the same problems:
 
 ### Core
 - [x] **Provider-agnostic proxy** — drop-in replacement for Anthropic `/v1/messages`
+- [x] **Streaming (SSE)** — token-by-token pass-through with inline usage capture
 - [x] **Multi-tenant API keys** (`gw_live_...`) with per-key limits
 - [x] **Rate limiting** — requests/minute + tokens/day enforced at gateway level
-- [x] **Cost tracking** — every request priced in USD by model
-- [x] **Anthropic prompt caching** — automatic `cache_control` injection for system prompts
+- [x] **Cost tracking** — every request priced in USD by model, including cache tokens
+- [x] **Anthropic prompt caching** — usage is parsed from responses and billed at cache rates
 
 ### Operations
 - [x] **Structured logging** (JSON, zerolog)
@@ -195,7 +196,7 @@ Daily rollups are stored in `daily_usage` — admin endpoints query this table f
 
 - [ ] OpenAI provider (GPT-4, GPT-4o)
 - [ ] Gemini provider
-- [ ] Streaming responses (SSE passthrough)
+- [x] ~~Streaming responses (SSE passthrough)~~ — shipped
 - [ ] Redis-backed rate limiting (for horizontal scaling)
 - [ ] Webhook alerts when budget thresholds are hit
 - [ ] Admin web UI (React)
