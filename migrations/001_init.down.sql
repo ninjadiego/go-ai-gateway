@@ -1,0 +1,4 @@
+DROP TABLE IF EXISTS daily_usage;
+DROP TABLE IF EXISTS requests;
+DROP TABLE IF EXISTS api_keys;
+DROP TABLE IF EXISTS users;

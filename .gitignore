@@ -1,0 +1,34 @@
+# Binaries
+/bin/
+/tmp/
+*.exe
+*.out
+*.test
+gateway
+
+# Env
+.env
+.env.local
+*.env.local
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Go
+vendor/
+coverage.out
+coverage.html
+
+# Docker volumes
+data/
+mysql-data/
+
+# Logs
+*.log
+logs/

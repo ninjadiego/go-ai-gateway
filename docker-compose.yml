@@ -1,0 +1,48 @@
+services:
+  mysql:
+    image: mysql:8.0
+    container_name: gateway-mysql
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: root_secret
+      MYSQL_DATABASE: ai_gateway
+      MYSQL_USER: gateway
+      MYSQL_PASSWORD: gateway_secret
+    command: >
+      --character-set-server=utf8mb4
+      --collation-server=utf8mb4_unicode_ci
+      --default-authentication-plugin=mysql_native_password
+    ports:
+      - "3306:3306"
+    volumes:
+      - mysql-data:/var/lib/mysql
+      - ./migrations:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "gateway", "-pgateway_secret"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  gateway:
+    build: .
+    container_name: gateway-api
+    restart: unless-stopped
+    depends_on:
+      mysql:
+        condition: service_healthy
+    environment:
+      PORT: 8080
+      ENV: development
+      LOG_LEVEL: debug
+      DB_HOST: mysql
+      DB_PORT: 3306
+      DB_USER: gateway
+      DB_PASSWORD: gateway_secret
+      DB_NAME: ai_gateway
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
+      ADMIN_TOKEN: ${ADMIN_TOKEN:-change-me}
+    ports:
+      - "8080:8080"
+
+volumes:
+  mysql-data:
