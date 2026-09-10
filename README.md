@@ -61,6 +61,7 @@ Request flow for `POST /v1/messages`:
 **Implemented**
 
 - Drop-in proxy for Anthropic `POST /v1/messages` — point the official SDK at the gateway and nothing else changes
+- OpenAI-compatible `POST /v1/chat/completions` — clients on the OpenAI SDK only change `base_url`; `gpt-*` model names map to the configured default Claude model (text, non-streaming)
 - Streaming (SSE) pass-through with inline usage capture
 - Multi-tenant API keys (`gw_live_...`), stored as SHA-256 hashes, show-once on creation
 - Per-key rate limiting (requests per minute, token bucket)
@@ -125,6 +126,19 @@ msg = client.messages.create(
 )
 ```
 
+```python
+# Existing OpenAI-SDK code keeps working: only base_url and api_key change
+from openai import OpenAI
+
+client = OpenAI(api_key="gw_live_...", base_url="http://localhost:8080/v1")
+resp = client.chat.completions.create(
+    model="gpt-4o",                      # served by ANTHROPIC_DEFAULT_MODEL
+    messages=[{"role": "system", "content": "Be brief."},
+              {"role": "user", "content": "Hello!"}],
+)
+print(resp.choices[0].message.content, resp.usage.total_tokens)
+```
+
 ```go
 req, _ := http.NewRequest(http.MethodPost, "http://localhost:8080/v1/messages", body)
 req.Header.Set("Authorization", "Bearer gw_live_...")
@@ -142,9 +156,9 @@ go-ai-gateway/
 ├── internal/
 │   ├── config/           # env-based configuration (fails fast on missing vars)
 │   ├── server/           # chi router and route wiring
-│   ├── handlers/         # proxy (JSON + SSE) and admin endpoints
+│   ├── handlers/         # Anthropic proxy (JSON + SSE), OpenAI-compatible endpoint, admin
 │   ├── middleware/       # api-key auth, admin auth, rate limit, budget guard, logging
-│   ├── providers/        # Anthropic client + pricing table
+│   ├── providers/        # Anthropic client, OpenAI<->Anthropic translation, pricing
 │   ├── service/          # auth (key generation/validation) and analytics
 │   ├── repository/       # MySQL data access
 │   ├── models/           # domain types
@@ -199,7 +213,7 @@ Keep `internal/providers/pricing.go` in sync with https://www.anthropic.com/pric
 
 ## Roadmap
 
-- [ ] OpenAI-compatible provider (`/v1/chat/completions`)
+- [ ] Streaming and tool calls on `/v1/chat/completions`
 - [ ] Redis-backed rate limiting for multiple gateway instances
 - [ ] Webhook alert when a key crosses 80 % of its budget
 - [ ] Prometheus `/metrics` endpoint

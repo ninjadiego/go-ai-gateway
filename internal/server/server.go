@@ -66,8 +66,9 @@ func (s *Server) Router() http.Handler {
 		r.Use(middleware.BudgetGuard(s.analyticsSvc))
 		r.Use(middleware.DailyTokenGuard(s.analyticsSvc))
 
-		proxy := handlers.NewProxy(s.anthropic, s.usageRepo)
-		r.Post("/messages", proxy.Messages)
+		proxy := handlers.NewProxy(s.anthropic, s.usageRepo, s.cfg.Anthropic.DefaultModel)
+		r.Post("/messages", proxy.Messages)                // Anthropic wire format (JSON + SSE)
+		r.Post("/chat/completions", proxy.ChatCompletions) // OpenAI wire format (JSON)
 	})
 
 	// Admin
