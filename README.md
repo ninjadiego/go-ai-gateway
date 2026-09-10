@@ -1,9 +1,10 @@
 # Go AI Gateway
 
-> Production-ready API gateway for LLM providers (Anthropic, OpenAI), written in Go.
-> Multi-tenant API keys, rate limiting, cost tracking, prompt caching, and usage analytics.
+> A self-hosted API gateway for LLM providers, written in Go.
+> Multi-tenant API keys, per-key rate limits and monthly budgets, cost tracking per request (including prompt-cache tokens), SSE streaming pass-through and usage analytics.
 
-[![Go Version](https://img.shields.io/badge/Go-1.22+-00ADD8?logo=go)](https://go.dev/)
+[![CI](https://github.com/ninjadiego/go-ai-gateway/actions/workflows/ci.yml/badge.svg)](https://github.com/ninjadiego/go-ai-gateway/actions/workflows/ci.yml)
+[![Go Version](https://img.shields.io/badge/Go-1.23+-00ADD8?logo=go)](https://go.dev/)
 [![MySQL](https://img.shields.io/badge/MySQL-8.0-4479A1?logo=mysql&logoColor=white)](https://www.mysql.com/)
 [![Docker](https://img.shields.io/badge/Docker-ready-2496ED?logo=docker&logoColor=white)](https://www.docker.com/)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
@@ -12,123 +13,121 @@
 
 ## Why this exists
 
-Every company integrating LLMs (Claude, GPT-4) runs into the same problems:
+Every team that integrates an LLM into a product runs into the same problems within a few weeks:
 
-- **Cost surprises.** A buggy prompt loop burns $500 overnight before anyone notices.
-- **No per-team limits.** Marketing, Support, and Engineering all share one API key — impossible to track who spent what.
-- **Rate-limit whack-a-mole.** When you hit Anthropic's limits, all your services fail at once.
-- **No caching.** You pay full price for the same system prompt 10,000 times a day when Anthropic's prompt caching could cut 90% of that.
+- **Cost surprises.** A buggy retry loop burns hundreds of dollars overnight before anyone notices.
+- **One shared provider key.** Marketing, Support and Engineering all use it, so nobody knows who spent what.
+- **No per-team limits.** One noisy service can exhaust the provider's rate limit for everyone.
+- **Cache tokens billed wrong.** Anthropic prompt caching reports separate token counts; most home-grown trackers ignore them and over-estimate cost.
 
-**Go AI Gateway** sits between your applications and the LLM provider. It gives you per-tenant API keys, enforces budgets, tracks every dollar, and uses Anthropic's prompt caching automatically.
+**Go AI Gateway** sits between your applications and the provider. Each app gets its own `gw_live_...` key with a requests-per-minute limit and an optional monthly budget in USD. Every request is priced, logged and rolled up per day, and the response carries the cost back to the caller in a header.
 
 ---
 
 ## Architecture
 
 ```
-┌─────────────┐       ┌──────────────────────────────┐       ┌──────────────┐
-│ Your App    │       │  Go AI Gateway               │       │              │
-│ (any lang)  ├──────▶│  ┌────────────────────────┐  ├──────▶│  Anthropic   │
-│             │       │  │ Auth middleware        │  │       │  Claude API  │
-│   Bearer    │       │  │ Rate limiter           │  │       │              │
-│   gw_xxx... │       │  │ Cost tracker           │  │       └──────────────┘
-└─────────────┘       │  │ Prompt cache optimizer │  │
-                      │  └───────────┬────────────┘  │       ┌──────────────┐
-                      │              │                │       │  OpenAI      │
-                      │              ▼                ├──────▶│  GPT-4 API   │
-                      │      ┌──────────────┐         │       │  (optional)  │
-                      │      │   MySQL 8    │         │       └──────────────┘
-                      │      │  • api_keys  │         │
-                      │      │  • requests  │         │
-                      │      │  • usage     │         │
-                      │      └──────────────┘         │
-                      └──────────────────────────────┘
+┌─────────────┐        ┌──────────────────────────────────────┐        ┌──────────────┐
+│  Your app   │        │  Go AI Gateway  (chi router)         │        │              │
+│  (any lang) │ ─────▶ │                                      │ ─────▶ │  Anthropic   │
+│             │        │  APIKeyAuth  → SHA-256 lookup        │        │  Messages    │
+│  Bearer     │ ◀───── │  RateLimit   → token bucket per key  │ ◀───── │  API         │
+│  gw_live_…  │        │  BudgetGuard → 402 when over budget  │        │              │
+└─────────────┘        │  Proxy       → JSON or SSE stream    │        └──────────────┘
+                       │  Pricing     → USD per model/tokens  │
+                       │              │                        │
+                       │              ▼  (async, best-effort)  │
+                       │      ┌──────────────┐                 │
+                       │      │   MySQL 8    │  api_keys        │
+                       │      │              │  requests        │
+                       │      │              │  daily_usage     │
+                       │      └──────────────┘                 │
+                       └──────────────────────────────────────┘
 ```
+
+Request flow for `POST /v1/messages`:
+
+1. `APIKeyAuth` hashes the bearer token and looks up an active key. The raw key is never stored.
+2. `RateLimit` applies a per-key token bucket (`rate_limit_rpm`).
+3. `BudgetGuard` compares month-to-date spend with `monthly_budget_usd` and answers `402 Payment Required` once it is reached. The check fails open on DB errors so a database hiccup never takes every tenant down.
+4. `Proxy` forwards the body verbatim to Anthropic. If the body has `"stream": true`, events are piped to the client as they arrive and usage is captured from the final `message_delta` event.
+5. Usage is priced with the model's per-million-token table (input, output, cache write, cache read) and recorded asynchronously, so a slow DB write never delays the response.
+
+---
 
 ## Features
 
-### Core
-- [x] **Provider-agnostic proxy** — drop-in replacement for Anthropic `/v1/messages`
-- [x] **Streaming (SSE)** — token-by-token pass-through with inline usage capture
-- [x] **Multi-tenant API keys** (`gw_live_...`) with per-key limits
-- [x] **Rate limiting** — requests/minute + tokens/day enforced at gateway level
-- [x] **Cost tracking** — every request priced in USD by model, including cache tokens
-- [x] **Anthropic prompt caching** — usage is parsed from responses and billed at cache rates
+**Implemented**
 
-### Operations
-- [x] **Structured logging** (JSON, zerolog)
-- [x] **Graceful shutdown** with connection draining
-- [x] **Health checks** (`/health`, `/ready`) for Kubernetes
-- [x] **OpenAPI 3 spec** served at `/docs`
-- [x] **Prometheus metrics** at `/metrics`
+- Drop-in proxy for Anthropic `POST /v1/messages` — point the official SDK at the gateway and nothing else changes
+- Streaming (SSE) pass-through with inline usage capture
+- Multi-tenant API keys (`gw_live_...`), stored as SHA-256 hashes, show-once on creation
+- Per-key rate limiting (requests per minute, token bucket)
+- Per-key monthly budget enforcement in USD
+- Per-request cost tracking, including Anthropic prompt-cache tokens, returned in `X-Gateway-Cost-USD`
+- Daily usage rollups and admin analytics (top models, p50/p95/p99 latency)
+- Structured JSON logging (zerolog), request IDs, panic recovery
+- Graceful shutdown with connection draining
+- `/health` and `/ready` endpoints for Kubernetes probes
+- Multi-stage Docker build, non-root runtime image, `docker compose` for local dev
+- CI on GitHub Actions: `go vet`, race-enabled tests with coverage, `golangci-lint`, build
 
-### Admin
-- [x] `POST /admin/keys` — create API key with limits
-- [x] `GET /admin/keys/:id/usage` — daily/monthly cost breakdown
-- [x] `GET /admin/analytics` — top models, latency p50/p95/p99
+**Admin API** (protected by `ADMIN_TOKEN`)
+
+| Method | Path                        | Purpose                                     |
+|--------|-----------------------------|---------------------------------------------|
+| POST   | `/admin/keys`               | Create a key with limits (returns raw key once) |
+| GET    | `/admin/keys?user_id=`      | List keys for a user                        |
+| GET    | `/admin/keys/{id}/usage`    | Daily usage and month-to-date cost          |
+| DELETE | `/admin/keys/{id}`          | Revoke a key                                |
+| GET    | `/admin/analytics?days=`    | Global overview: requests, cost, latency    |
 
 ---
 
-## Quickstart (60 seconds)
+## Quickstart
 
 ```bash
-# 1. Clone
 git clone https://github.com/ninjadiego/go-ai-gateway.git
 cd go-ai-gateway
 
-# 2. Set your Anthropic key
-cp .env.example .env
-echo "ANTHROPIC_API_KEY=sk-ant-..." >> .env
+cp .env.example .env            # set ANTHROPIC_API_KEY and ADMIN_TOKEN
+docker compose up -d            # MySQL 8 + gateway on :8080
 
-# 3. Start everything (MySQL + gateway)
-docker compose up -d
-
-# 4. Create your first gateway key
-curl -X POST http://localhost:8080/admin/keys \
+# Create a tenant key with 60 rpm and a USD 50 monthly budget
+curl -s -X POST http://localhost:8080/admin/keys \
+  -H "Authorization: Bearer $ADMIN_TOKEN" \
   -H "Content-Type: application/json" \
-  -d '{"name":"my-app","rate_limit_rpm":60,"monthly_budget_usd":50}'
-# → { "api_key": "gw_live_abc123...", "id": 1 }
+  -d '{"user_id":1,"name":"my-app","rate_limit_rpm":60,"monthly_budget_usd":50}'
+# → {"id":1,"api_key":"gw_live_...","prefix":"gw_live_ab12cd34","message":"Store this key securely — it will not be shown again."}
 
-# 5. Use it exactly like the Anthropic API
-curl http://localhost:8080/v1/messages \
-  -H "Authorization: Bearer gw_live_abc123..." \
+# Use it exactly like the Anthropic API
+curl -i http://localhost:8080/v1/messages \
+  -H "Authorization: Bearer gw_live_..." \
   -H "Content-Type: application/json" \
-  -d '{
-    "model": "claude-sonnet-4-6",
-    "max_tokens": 1024,
-    "messages": [{"role":"user","content":"Hello!"}]
-  }'
+  -d '{"model":"claude-sonnet-4-6","max_tokens":256,"messages":[{"role":"user","content":"Hello!"}]}'
+# → HTTP/1.1 200 OK
+# → X-Gateway-Cost-USD: 0.000411
+# → X-Gateway-Latency-MS: 842
 ```
 
----
-
-## Usage from code
-
-### Python (drop-in Anthropic SDK replacement)
+### From code
 
 ```python
 from anthropic import Anthropic
 
-# Point the SDK at your gateway instead of api.anthropic.com
-client = Anthropic(
-    api_key="gw_live_abc123...",
-    base_url="http://localhost:8080",
-)
-
-message = client.messages.create(
+client = Anthropic(api_key="gw_live_...", base_url="http://localhost:8080")
+msg = client.messages.create(
     model="claude-sonnet-4-6",
-    max_tokens=1024,
+    max_tokens=256,
     messages=[{"role": "user", "content": "Hello!"}],
 )
 ```
 
-### Go
-
 ```go
-req, _ := http.NewRequest("POST", "http://localhost:8080/v1/messages", body)
-req.Header.Set("Authorization", "Bearer gw_live_abc123...")
+req, _ := http.NewRequest(http.MethodPost, "http://localhost:8080/v1/messages", body)
+req.Header.Set("Authorization", "Bearer gw_live_...")
 req.Header.Set("Content-Type", "application/json")
-resp, _ := http.DefaultClient.Do(req)
+resp, err := http.DefaultClient.Do(req)
 ```
 
 ---
@@ -137,23 +136,21 @@ resp, _ := http.DefaultClient.Do(req)
 
 ```
 go-ai-gateway/
-├── cmd/gateway/          # main.go — entry point
+├── cmd/gateway/          # main.go — config, DB, HTTP server, graceful shutdown
 ├── internal/
-│   ├── config/           # env-based configuration
-│   ├── server/           # HTTP server, routing, graceful shutdown
-│   ├── handlers/         # request handlers (proxy, admin, analytics)
-│   ├── middleware/       # auth, rate limit, logging, cost tracking
-│   ├── providers/        # LLM provider clients (Anthropic, OpenAI)
+│   ├── config/           # env-based configuration (fails fast on missing vars)
+│   ├── server/           # chi router and route wiring
+│   ├── handlers/         # proxy (JSON + SSE) and admin endpoints
+│   ├── middleware/       # api-key auth, admin auth, rate limit, budget guard, logging
+│   ├── providers/        # Anthropic client + pricing table
+│   ├── service/          # auth (key generation/validation) and analytics
+│   ├── repository/       # MySQL data access
 │   ├── models/           # domain types
-│   ├── repository/       # data access (MySQL)
-│   ├── service/          # business logic
-│   └── database/         # connection + migrations runner
-├── migrations/           # SQL migrations (up/down)
-├── scripts/              # dev utilities (seed data, load test)
-├── docker-compose.yml
-├── Dockerfile
-├── Makefile
-└── README.md
+│   └── database/         # connection pool
+├── migrations/           # SQL migrations (up/down), auto-applied by docker compose
+├── scripts/              # seed data
+├── .github/workflows/    # CI
+├── docker-compose.yml · Dockerfile · Makefile
 ```
 
 ---
@@ -161,45 +158,52 @@ go-ai-gateway/
 ## Development
 
 ```bash
-make dev          # Run locally with hot-reload (requires air)
-make test         # Run unit tests
-make test-integration  # Run integration tests (requires MySQL)
-make lint         # Run golangci-lint
-make docs         # Regenerate OpenAPI spec
-make db-migrate   # Apply migrations
-make db-seed      # Seed demo data
+make test         # unit tests with -race and coverage
+make lint         # golangci-lint
+make build        # binary in bin/gateway
+make docker-up    # MySQL + gateway
+make db-migrate   # apply migrations (needs golang-migrate)
 ```
 
-### Requirements
+Unit tests need no database or network: middleware is tested with `httptest` and fakes, and the Anthropic client is tested against a local fake upstream (`internal/providers/anthropic_test.go`).
 
-- Go 1.22+
-- MySQL 8.0+ (or use Docker Compose)
-- Anthropic API key
+Requirements: Go 1.23+, MySQL 8 (or Docker), an Anthropic API key.
 
 ---
 
 ## Pricing model
 
-The gateway automatically prices every request based on the model and token usage:
+Cost is computed per request from the model name (dated suffixes such as `-20250514` are normalised) and the four token counters Anthropic returns. Unknown models fall back to Sonnet pricing so a request is never left unbilled.
 
-| Model              | Input ($/1M tok) | Output ($/1M tok) | Cache write | Cache read |
-|--------------------|------------------|-------------------|-------------|------------|
-| claude-opus-4      | $15.00           | $75.00            | $18.75      | $1.50      |
-| claude-sonnet-4-6  | $3.00            | $15.00            | $3.75       | $0.30      |
-| claude-haiku-4-5   | $0.80            | $4.00             | $1.00       | $0.08      |
+| Model             | Input ($/1M) | Output ($/1M) | Cache write | Cache read |
+|-------------------|-------------:|--------------:|------------:|-----------:|
+| claude-opus-4-x   | 15.00        | 75.00         | 18.75       | 1.50       |
+| claude-sonnet-4-x | 3.00         | 15.00         | 3.75        | 0.30       |
+| claude-haiku-4-x  | 0.80         | 4.00          | 1.00        | 0.08       |
 
-Daily rollups are stored in `daily_usage` — admin endpoints query this table for fast analytics.
+Keep `internal/providers/pricing.go` in sync with https://www.anthropic.com/pricing.
+
+---
+
+## Design decisions
+
+- **No official SDK for the upstream call.** A 200-line client keeps the proxy behaviour explicit (headers, streaming, error pass-through) and avoids pulling a large dependency into the hot path.
+- **Hash the key, not encrypt it.** Keys are random 192-bit values; a SHA-256 lookup is enough and there is nothing to leak if the table is dumped.
+- **Async usage writes.** Billing rows are written in a goroutine with its own timeout, so the caller's latency is the provider's latency, not the provider's plus MySQL's.
+- **Fail open on the budget check, fail closed on auth.** Losing money for a minute is recoverable; letting anonymous traffic through is not.
+- **In-memory rate limiter.** Correct for a single instance and simple to reason about. Horizontal scaling needs a Redis-backed limiter (see roadmap).
 
 ---
 
 ## Roadmap
 
-- [ ] OpenAI provider (GPT-4, GPT-4o)
-- [ ] Gemini provider
-- [x] ~~Streaming responses (SSE passthrough)~~ — shipped
-- [ ] Redis-backed rate limiting (for horizontal scaling)
-- [ ] Webhook alerts when budget thresholds are hit
-- [ ] Admin web UI (React)
+- [ ] Daily token limit enforcement (`daily_token_limit` is stored but not yet enforced)
+- [ ] OpenAI-compatible provider (`/v1/chat/completions`)
+- [ ] Redis-backed rate limiting for multiple gateway instances
+- [ ] Webhook alert when a key crosses 80 % of its budget
+- [ ] Prometheus `/metrics` endpoint
+- [ ] OpenAPI spec for the admin API
+- [ ] Integration test suite against MySQL in CI (service container)
 
 ---
 
@@ -207,4 +211,4 @@ Daily rollups are stored in `daily_usage` — admin endpoints query this table f
 
 MIT © 2026 Diego Peña
 
-Built as a portfolio project to showcase production Go + LLM integration. Feedback and contributions welcome.
+Built as a portfolio project to show production-style Go and LLM integration. Feedback and contributions are welcome.
