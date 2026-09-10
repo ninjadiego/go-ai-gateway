@@ -64,6 +64,7 @@ func (s *Server) Router() http.Handler {
 		r.Use(middleware.APIKeyAuth(s.authSvc))
 		r.Use(middleware.RateLimit(s.authSvc))
 		r.Use(middleware.BudgetGuard(s.analyticsSvc))
+		r.Use(middleware.DailyTokenGuard(s.analyticsSvc))
 
 		proxy := handlers.NewProxy(s.anthropic, s.usageRepo)
 		r.Post("/messages", proxy.Messages)

@@ -101,6 +101,22 @@ func (r *UsageRepo) MonthlyCostUSD(ctx context.Context, apiKeyID int64) (float64
 	return cost.Float64, nil
 }
 
+// TokensUsedToday returns input+output tokens consumed by a key on the
+// current UTC date, read from the daily_usage rollup.
+func (r *UsageRepo) TokensUsedToday(ctx context.Context, apiKeyID int64) (int64, error) {
+	var tokens sql.NullInt64
+	err := r.db.QueryRowContext(ctx, `
+		SELECT COALESCE(SUM(total_input_tokens + total_output_tokens), 0)
+		  FROM daily_usage
+		 WHERE api_key_id = ?
+		   AND usage_date = CURRENT_DATE
+	`, apiKeyID).Scan(&tokens)
+	if err != nil {
+		return 0, err
+	}
+	return tokens.Int64, nil
+}
+
 // AnalyticsOverview returns high-level metrics for the last N days.
 type AnalyticsOverview struct {
 	TotalRequests int64     `json:"total_requests"`
