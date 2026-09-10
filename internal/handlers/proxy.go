@@ -23,12 +23,15 @@ func bgCtx() (context.Context, context.CancelFunc) {
 }
 
 type Proxy struct {
-	anthropic *providers.Anthropic
-	usage     *repository.UsageRepo
+	anthropic    *providers.Anthropic
+	usage        *repository.UsageRepo
+	defaultModel string
 }
 
-func NewProxy(a *providers.Anthropic, u *repository.UsageRepo) *Proxy {
-	return &Proxy{anthropic: a, usage: u}
+// NewProxy builds the proxy handlers. defaultModel is the Claude model used
+// when an OpenAI-compatible client asks for a non-Claude model (e.g. gpt-4o).
+func NewProxy(a *providers.Anthropic, u *repository.UsageRepo, defaultModel string) *Proxy {
+	return &Proxy{anthropic: a, usage: u, defaultModel: defaultModel}
 }
 
 // Messages proxies POST /v1/messages to Anthropic, records usage, prices it,
