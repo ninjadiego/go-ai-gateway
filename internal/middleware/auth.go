@@ -55,6 +55,12 @@ func AdminAuth(token string) func(http.Handler) http.Handler {
 	}
 }
 
+// ContextWithAPIKey attaches an authenticated key to ctx. Exported so
+// handler tests can simulate APIKeyAuth without a database.
+func ContextWithAPIKey(ctx context.Context, key *models.APIKey) context.Context {
+	return context.WithValue(ctx, ctxAPIKey, key)
+}
+
 // APIKeyFromContext retrieves the authenticated APIKey set by APIKeyAuth.
 func APIKeyFromContext(ctx context.Context) (*models.APIKey, bool) {
 	k, ok := ctx.Value(ctxAPIKey).(*models.APIKey)
