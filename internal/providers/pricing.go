@@ -13,13 +13,13 @@ type Price struct {
 // anthropicPricing lists USD per 1M tokens as of 2026.
 // Keep in sync with https://www.anthropic.com/pricing.
 var anthropicPricing = map[string]Price{
-	"claude-opus-4-7":    {Input: 15.00, Output: 75.00, CacheWrite: 18.75, CacheRead: 1.50},
-	"claude-opus-4-6":    {Input: 15.00, Output: 75.00, CacheWrite: 18.75, CacheRead: 1.50},
-	"claude-opus-4":      {Input: 15.00, Output: 75.00, CacheWrite: 18.75, CacheRead: 1.50},
-	"claude-sonnet-4-6":  {Input: 3.00, Output: 15.00, CacheWrite: 3.75, CacheRead: 0.30},
-	"claude-sonnet-4":    {Input: 3.00, Output: 15.00, CacheWrite: 3.75, CacheRead: 0.30},
-	"claude-haiku-4-5":   {Input: 0.80, Output: 4.00, CacheWrite: 1.00, CacheRead: 0.08},
-	"claude-haiku-4":     {Input: 0.80, Output: 4.00, CacheWrite: 1.00, CacheRead: 0.08},
+	"claude-opus-4-7":   {Input: 15.00, Output: 75.00, CacheWrite: 18.75, CacheRead: 1.50},
+	"claude-opus-4-6":   {Input: 15.00, Output: 75.00, CacheWrite: 18.75, CacheRead: 1.50},
+	"claude-opus-4":     {Input: 15.00, Output: 75.00, CacheWrite: 18.75, CacheRead: 1.50},
+	"claude-sonnet-4-6": {Input: 3.00, Output: 15.00, CacheWrite: 3.75, CacheRead: 0.30},
+	"claude-sonnet-4":   {Input: 3.00, Output: 15.00, CacheWrite: 3.75, CacheRead: 0.30},
+	"claude-haiku-4-5":  {Input: 0.80, Output: 4.00, CacheWrite: 1.00, CacheRead: 0.08},
+	"claude-haiku-4":    {Input: 0.80, Output: 4.00, CacheWrite: 1.00, CacheRead: 0.08},
 }
 
 // CostUSD returns the total cost in USD for the given usage on the given model.
