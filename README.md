@@ -33,7 +33,8 @@ Every team that integrates an LLM into a product runs into the same problems wit
 │             │        │  APIKeyAuth  → SHA-256 lookup        │        │  Messages    │
 │  Bearer     │ ◀───── │  RateLimit   → token bucket per key  │ ◀───── │  API         │
 │  gw_live_…  │        │  BudgetGuard → 402 when over budget  │        │              │
-└─────────────┘        │  Proxy       → JSON or SSE stream    │        └──────────────┘
+└─────────────┘        │  DailyTokens → 429 when over quota   │        └──────────────┘
+                       │  Proxy       → JSON or SSE stream    │
                        │  Pricing     → USD per model/tokens  │
                        │              │                        │
                        │              ▼  (async, best-effort)  │
@@ -49,7 +50,7 @@ Request flow for `POST /v1/messages`:
 
 1. `APIKeyAuth` hashes the bearer token and looks up an active key. The raw key is never stored.
 2. `RateLimit` applies a per-key token bucket (`rate_limit_rpm`).
-3. `BudgetGuard` compares month-to-date spend with `monthly_budget_usd` and answers `402 Payment Required` once it is reached. The check fails open on DB errors so a database hiccup never takes every tenant down.
+3. `BudgetGuard` compares month-to-date spend with `monthly_budget_usd` and answers `402 Payment Required` once it is reached, and `DailyTokenGuard` answers `429` once today's tokens reach `daily_token_limit`. Both fail open on DB errors so a database hiccup never takes every tenant down.
 4. `Proxy` forwards the body verbatim to Anthropic. If the body has `"stream": true`, events are piped to the client as they arrive and usage is captured from the final `message_delta` event.
 5. Usage is priced with the model's per-million-token table (input, output, cache write, cache read) and recorded asynchronously, so a slow DB write never delays the response.
 
@@ -64,6 +65,7 @@ Request flow for `POST /v1/messages`:
 - Multi-tenant API keys (`gw_live_...`), stored as SHA-256 hashes, show-once on creation
 - Per-key rate limiting (requests per minute, token bucket)
 - Per-key monthly budget enforcement in USD
+- Per-key daily token limit (input + output), reset at 00:00 UTC
 - Per-request cost tracking, including Anthropic prompt-cache tokens, returned in `X-Gateway-Cost-USD`
 - Daily usage rollups and admin analytics (top models, p50/p95/p99 latency)
 - Structured JSON logging (zerolog), request IDs, panic recovery
@@ -197,7 +199,6 @@ Keep `internal/providers/pricing.go` in sync with https://www.anthropic.com/pric
 
 ## Roadmap
 
-- [ ] Daily token limit enforcement (`daily_token_limit` is stored but not yet enforced)
 - [ ] OpenAI-compatible provider (`/v1/chat/completions`)
 - [ ] Redis-backed rate limiting for multiple gateway instances
 - [ ] Webhook alert when a key crosses 80 % of its budget
