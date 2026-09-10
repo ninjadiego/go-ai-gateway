@@ -41,6 +41,7 @@ func TestProtectedRoutesRejectAnonymous(t *testing.T) {
 		method, path string
 	}{
 		{http.MethodPost, "/v1/messages"},
+		{http.MethodPost, "/v1/chat/completions"},
 		{http.MethodGet, "/admin/keys"},
 		{http.MethodPost, "/admin/keys"},
 		{http.MethodGet, "/admin/analytics"},
