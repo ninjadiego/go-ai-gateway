@@ -26,6 +26,11 @@ func (s *AnalyticsService) MonthlyCost(ctx context.Context, apiKeyID int64) (flo
 	return s.repo.MonthlyCostUSD(ctx, apiKeyID)
 }
 
+// TokensToday returns the tokens a key has consumed on the current UTC date.
+func (s *AnalyticsService) TokensToday(ctx context.Context, apiKeyID int64) (int64, error) {
+	return s.repo.TokensUsedToday(ctx, apiKeyID)
+}
+
 func (s *AnalyticsService) Overview(ctx context.Context, days int) (*repository.AnalyticsOverview, error) {
 	if days <= 0 {
 		days = 30
